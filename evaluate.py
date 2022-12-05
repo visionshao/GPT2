@@ -204,7 +204,9 @@ def main(args):
                 dis_knowledges = [[knowledges[bi][dis_out[0][bi].item()]] for bi in range(len(knowledges))]
 
                 gen_args = gen_batcher(dis_knowledges, histories, users, responses, args.segment, True)
-                loss = gen_criterion(gen_model(gen_args[0], token_type_ids=gen_args[1])[0], gen_args[2])
+                gen_outputs = gen_model(gen_args[0], token_type_ids=gen_args[1])
+                # print(len(gen_outputs[1]))
+                loss = gen_criterion(gen_outputs[0], gen_args[2])
                 n_token += loss.size(0)
                 test_loss += loss.sum().item()
 

@@ -16,6 +16,89 @@ def save_hparams(args, path):
         for attr, value in sorted(vars(args).items()):
             f.writelines("{}={}\n".format(attr.upper(), value))
 
+def check_mem(cuda_device):
+    devices_info = os.popen('"nvidia-smi" --query-gpu=memory.total,memory.used --format=csv,nounits,noheader').read().strip().split("\n")
+    total, used = devices_info[int(cuda_device)].split(',')
+    return total,used
+
+def check_mem_all():
+    devices_info = os.popen('"nvidia-smi" --query-gpu=memory.total,memory.used --format=csv,nounits,noheader').read().strip().split("\n")
+    return devices_info
+
+def occupy_mem_single(cuda_device, ratio=0.6):
+    import time
+
+    while True:
+        devices_info = check_mem_all()
+        # for cuda_device in range(num_devices):
+        total, used = devices_info[int(cuda_device)].split(',')
+        total = int(total)
+        used = int(used)
+        occupy = int(total * ratio)
+        print("Device-{}: {}/{}/{}".format(cuda_device, total, used, occupy))
+        if occupy + used <= total * 0.95:
+            print('Find device-{}!'.format(cuda_device))
+            os.environ['CUDA_VISIBLE_DEVICES'] = str(cuda_device)
+            try:
+                x = torch.cuda.FloatTensor(256, 1024, occupy, device='cuda:0')
+                del x
+            except RuntimeError:
+                print("Failed, continue...")
+                time.sleep(2)
+                continue
+            break
+    print('Success.')
+
+def occupy_mem_new(cuda_device_list, ratio=0.6, num_devices=8):
+    import time
+
+    if len(cuda_device_list) == 0 or len(cuda_device_list[0]) == 0:
+        while True:
+            devices_info = check_mem_all()
+            available_devices = []
+            occupys = []
+            for cuda_device in range(num_devices):
+                total, used = devices_info[int(cuda_device)].split(',')
+                total = int(total)
+                used = int(used)
+                occupy = int(total * ratio)
+                print("Device-{}: {}/{}/{}".format(cuda_device, total, used, occupy))
+                if occupy + used <= total * 0.95:
+                    print('Find device-{}!'.format(cuda_device))
+                    available_devices.append(cuda_device)
+                    occupys.append(occupy)
+            if len(available_devices) > 0: # hoooope
+                print(available_devices[0])
+                os.environ['CUDA_VISIBLE_DEVICES'] = str(available_devices[0])
+                try:
+                    x = torch.cuda.FloatTensor(256, 1024, occupys[0], device='cuda:0')
+                    del x
+                except RuntimeError:
+                    print("Failed, continue...")
+                    time.sleep(2)
+                    continue
+                break
+        input(">>>>>")
+    else:
+        os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(cuda_device_list)
+        for id, cuda_device in enumerate(cuda_device_list):
+            while True:
+                total, used = check_mem(cuda_device)
+                total = int(total)
+                used = int(used)
+                occupy = int(total * ratio)
+                print("Device-{}: {}/{}/{}".format(cuda_device, total, used, occupy))
+                if occupy + used <= total * 0.95:
+                    print('Find device-{}!'.format(cuda_device))
+                    try:
+                        x = torch.cuda.FloatTensor(256, 1024, occupy, device='cuda:{}'.format(id))
+                        del x
+                    except RuntimeError:
+                        time.sleep(2)
+                        continue
+                    break
+        input('>>>>')
+
 class KGDataset(Dataset):
     def __init__(self, data_path, max_knowledge=32):
         # load data
@@ -42,7 +125,8 @@ class KGDataset(Dataset):
             keepers[0] = 0
             knowledge = [knowledge[id] for id in keepers]
 
-        return ('\n\n'.join(knowledge), '\n\n'.join(history), np.array(user), response)
+        # return ('\n\n'.join(knowledge), '\n\n'.join(history), np.array(user), response)
+        return (knowledge, history, np.array(user), response)
 
 
 def collate_fn(batch):
@@ -50,12 +134,13 @@ def collate_fn(batch):
     histories    = [item[1] for item in batch]
     users        = [item[2] for item in batch]
     responses    = [item[3] for item in batch]
-    knowledge_lens = [len(knowledge.strip().split('\n\n')) for knowledge in knowledges]
+    # knowledge_lens = [len(knowledge.strip().split('\n\n')) for knowledge in knowledges]
 
     max_user = max([u.shape[0] for u in users])
     users = [np.pad(u, (0, max_user - u.shape[0]), 'constant', constant_values=-1) for u in users]
 
-    return knowledges, histories, users, responses, knowledge_lens
+    # return knowledges, histories, users, responses, knowledge_lens
+    return knowledges, histories, users, responses
 
 
 def get_batch_loader(dataset, collate_fn, batch_size=2, num_workers=0, is_test=True):
@@ -145,7 +230,8 @@ class GenBatcher:
                 ids = ids + [0] * (self.block_size - len(ids))
                 type_ids = type_ids + [0] * (self.block_size - len(type_ids))
                 tgt = tgt + [-1] * (self.block_size - len(tgt))
-
+                # print(tgt)
+                # print(ids)
                 input_ids.append(ids)
                 token_type_ids.append(type_ids)
                 targets.append(tgt)
