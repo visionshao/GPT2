@@ -1,0 +1,13 @@
+{
+    "Token": "djWlCqxMFfe5e01p8uBBWg",
+    "business_flag": "nlpc",
+    "task_flag": "train_GPT2",
+    "readable_name": "train_GPT2",
+    "model_local_file_path": "/apdcephfs/share_916081/visionshao/Exp4Dialogue/GPT2/start",
+    "host_num": 1,
+    "host_gpu_num": 2,
+    "is_elasticity": true,
+    "enable_evicted_pulled_up": true,
+    "enable_evicted_end_task": true,
+    "image_full_name": "mirrors.tencent.com/visionshao_space/g-tlinux2.2-python3.6-cuda11.0-cudnn8.1-torch1.9-cu111:v0"
+}
