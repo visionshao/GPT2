@@ -1,2 +1,4 @@
 # GPT2
-Test GPT2 on some tasks
+- Train a GPT23 Model
+	- cd start
+	- bash start.sh
