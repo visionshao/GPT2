@@ -98,6 +98,25 @@ class GPT2Summ(GPT2PreTrainedModel):
             length_penalty=length_penalty,
             no_repeat_ngram_size=no_repeat_ngram_size,
         )
+
+        return output_sequences
+
+    def old_batch_decode(self, input_ids, max_len, eos_id, start_id):
+        # new-version
+        output_sequences = self.generate(
+            input_ids=input_ids,
+            max_length=input_ids.size(1) + max_len,
+            do_sample=False,
+            # early_stopping=True,
+            num_beams=1,
+            repetition_penalty=1.0,
+            pad_token_id=0,
+            eos_token_id=eos_id,
+            length_penalty=1.0,
+            # no_repeat_ngram_size=3, #
+            # decoder_start_token_id=start_id, #
+        )
+
         return output_sequences
 
 def load_gen_net(tokenizer, segment, gpt2_config, gen_pretrain_file, load=True, cuda=True):
@@ -144,9 +163,12 @@ def main(args):
     time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print("Create training dataset begain... | %s " % time_str)
 
-    train_dataset = KGDataset(args.train_file, max_knowledge=args.max_knowledge)
-    test_seen_dataset = KGDataset(args.test_seen_file, max_knowledge=999)
-    test_unseen_dataset = KGDataset(args.test_unseen_file, max_knowledge=999)
+    train_dataset = KGDataset(args.train_file, max_knowledge=args.max_knowledge) # 74092
+    print(len(train_dataset))
+    test_seen_dataset = KGDataset(args.test_seen_file, max_knowledge=999) # 3865
+    print(len(test_seen_dataset))
+    test_unseen_dataset = KGDataset(args.test_unseen_file, max_knowledge=999) # 3924
+    print(len(test_unseen_dataset))
 
     train_loader = get_batch_loader(train_dataset, collate_fn=collate_fn, batch_size=args.batch_size, is_test=False)
     test_seen_loader = get_batch_loader(test_seen_dataset, collate_fn=collate_fn, batch_size=args.eval_batch_size, is_test=True)
@@ -170,43 +192,20 @@ def main(args):
     def train_step(global_step):
         loss = 0.0
         curr_temp = max(args.init_temp * math.exp(-args.anneal_rate * global_step), args.min_temp)
-
-        # weights_all = []
-        # for _ in range(args.accum_steps):
-
-        # knowledges, histories, users, responses, knowledge_lens = next(train_loader)
-        # knowledges = [know.split('\n\n') for know in knowledges]
-        # histories = [his.split('\n\n') for his in histories]
-
-        knowledges, histories, users, responses = next(train_loader)
-        # filter
-        weights = [1.0 for bi in range(len(knowledges))]
-        # weights_all.append(weights)
-        # knowledges_all.append(knowledges)
-        # histories_all.append(histories)
-        # users_all.append(users)
-        # responses_all.append(responses)
-        # knowledge_lens_all.append(knowledge_lens)
-
-
         gen_model.train()
-        # dis_model.eval()
+        for _ in range(args.accum_steps):
+            knowledges, histories, users, responses = next(train_loader)
+            # random
+            for know in knowledges:
+                np.random.shuffle(know)
+            # filter
+            weights = [1.0 for bi in range(len(knowledges))]
+            lm_input, token_type_ids, lm_target = gen_batcher(knowledges, histories, users, responses, args.segment, True)
+            gen_loss = gen_criterion(gen_model(lm_input, token_type_ids=token_type_ids)[0], lm_target, weights).mean()
+            gen_loss = gen_loss / len(knowledges)
+            gen_loss.backward()
+            loss += gen_loss.item()
 
-        # if args.curriculum == 'pseudo':
-        #     dis_knowledges = []
-        #     for know, resp in zip(knowledges, responses):
-        #         indices = list(range(len(know)))
-        #         rouges = [f1_metric([k], [resp]) for k in know]
-        #         ext = max(indices, key=lambda i: rouges[i])
-        #         dis_knowledges.append([know[ext]])
-        dis_knowledges = knowledges
-
-        lm_input, token_type_ids, lm_target = gen_batcher(dis_knowledges, histories, users, responses, args.segment, True)
-        gen_loss = gen_criterion(gen_model(lm_input, token_type_ids=token_type_ids)[0], lm_target, weights).mean()
-        gen_loss = gen_loss / len(knowledges)
-        gen_loss.backward()
-        loss += gen_loss.item()
-        # print(gen_loss.item())
         grad_norm = torch.nn.utils.clip_grad_norm_(
             [p for p in gen_model.parameters() if p.requires_grad], args.clip)
         if grad_norm >= 1e2:
@@ -220,7 +219,6 @@ def main(args):
 
 
     def dev_step(split, global_step):
-
         if split == 'test_seen':
             test_loader = test_seen_loader
         elif split == 'test_unseen':
@@ -241,19 +239,12 @@ def main(args):
             for knowledges, histories, users, responses in test_loader:
                 weights = [1.0 for bi in range(len(knowledges))]
 
-                # dynamic dis
-                # dis_args = dis_batcher(knowledges, histories, knowledge_lens, args.n_sent)
-                # dis_outputs = dis_model(*dis_args)
-                # dis_knowledges = [[knowledges[bi][dis_outputs[ti][bi]] for ti in range(len(dis_outputs))] for bi in range(len(knowledges))]
-
-                # fixed dis
-                # dis_knowledges = []
-                # for know, pred in zip(knowledges, predictions):
-                    # dis_knowledges.append([know[p] for p in pred.tolist() if p != -1])
-                    # dis_knowledges.append([know[p] for p in [0, 1] if p != -1])
-                dis_knowledges = [[know[0]] for know in knowledges]
+                random_knowledges = []
+                for know in knowledges:
+                    np.random.shuffle(know)
+                    random_knowledges.append(know)
+                dis_knowledges = random_knowledges
                 # dis_knowledges = knowledges
-
 
                 gen_args = gen_batcher(dis_knowledges, histories, users, responses, args.segment, True)
                 loss = gen_criterion(gen_model(gen_args[0], token_type_ids=gen_args[1])[0], gen_args[2], weights)
@@ -268,11 +259,14 @@ def main(args):
                                     args.length_penalty, args.no_repeat_ngram_size)
                     dec_out = dec_out[0].tolist()[dec_in.size(1):]
                     _hyp = gen_batcher.tokenizer.decode(dec_out, skip_special_tokens=True, clean_up_tokenization_spaces=False)
-                    
+                    # print(_hyp.replace("\n", " "))
+                    # print("--------------------")
                     _ref = responses[bi]
                     test_hyp.append(_hyp)
                     test_ref.append(_ref)
-
+                    # print(_hyp.replace("\n", " "))
+                    # print(_ref)
+                    # print("*********************************")
                     count += 1
                     if count % 1000 == 0:
                         print(count)
@@ -309,17 +303,17 @@ def main(args):
             gen_schedule.step(test_seen_results['loss'])
             # gen_schedule.step(test_seen_results['f1'])
 
-            if test_seen_results["f1"] > best_f1:
-            # if test_seen_results['loss'] < best_loss:
-                best_f1 = test_seen_results["f1"]
-                # best_loss = test_seen_results['loss']
-
+            # if test_seen_results["f1"] > best_f1:
+            if test_seen_results['loss'] < best_loss:
+                # best_f1 = test_seen_results["f1"]
+                best_loss = test_seen_results['loss']
                 # save_dict = {'state_dict': gen_model.state_dict()}
                 # torch.save(save_dict, '{}-{}'.format(checkpoint_prefix, i + 1))
                 gen_dict = {'state_dict': gen_model.state_dict()}
                 torch.save(gen_dict, '{}-gen-best'.format(checkpoint_prefix))
                 print("Saved model checkpoint to {}\n".format(checkpoint_prefix))
                 with open(os.path.join(out_dir, 'results'), 'w', encoding='utf-8') as result_file:
+                    result_file.write("The best model is on step {}\n".format(i+1))
                     result_file.write("test seen result: \n")
                     result_file.write(
                         "PPL: {:.4f}\nBLEU-1/2/3/4: {:.4f}/{:.4f}/{:.4f}/{:.4f}\nDistinct-1/2: {:.4f}/{:.4f}\nF1: {:.4f}\n".format(
@@ -352,7 +346,7 @@ if __name__ == '__main__':
     # training scheme
     parser.add_argument('--batch_size', type=int, default=2)
     parser.add_argument('--eval_batch_size', type=int, default=4)
-    parser.add_argument('--num_steps', type=int, default=1000000)
+    parser.add_argument('--num_steps', type=int, default=100000)
     parser.add_argument('--accum_steps', type=int, default=32)
     parser.add_argument('--lr', type=float, default=5e-5)
     parser.add_argument('--decay', type=float, default=0.5)
@@ -362,11 +356,11 @@ if __name__ == '__main__':
     parser.add_argument('--anneal_rate', type=float, default=0.001)
     parser.add_argument('--curriculum', type=str, default='pseudo')
 
-    parser.add_argument('--print_every', type=int, default=1000)
-    parser.add_argument('--valid_every', type=int, default=10000)
+    parser.add_argument('--print_every', type=int, default=100)
+    parser.add_argument('--valid_every', type=int, default=1000)
 
     # save
-    parser.add_argument('--exp_name', type=str, default='1011_test')
+    parser.add_argument('--exp_name', type=str, default='1216_test')
     parser.add_argument('--log', type=str, default='/apdcephfs/share_916081/visionshao/Exp4Dialogue/GPT2/wizard_of_wikipedia/log')
 
     parser.add_argument('--seed', type=int, default=42)
@@ -374,9 +368,9 @@ if __name__ == '__main__':
     # pre-train
     # parser.add_argument('--dis_pretrain_file', type=str, default='/apdcephfs/share_916081/visionshao/Exp4Dialogue/KnowledGPT/ft_local/EMNLP_code/ks_pretrain/wizard_of_wikipedia/log/0305_extract/ckpt/ckpt-2.342443-2000')
     # parser.add_argument('--gen_pretrain_file', type=str, default='/apdcephfs/share_916081/visionshao/Exp4Dialogue/KnowledGPT/ft_local/EMNLP_code/ks_pretrain/wizard_of_wikipedia/log/0429_pseudo_generative/checkpoints/')
-    parser.add_argument('--gen_pretrain_file', type=str, default='/apdcephfs/share_916081/visionshao/Exp4Dialogue/GPT2/wizard_of_wikipedia/log/1010_test/checkpoints/model-gen-best')
-    parser.add_argument('--load_dis', type=str2bool, default=True)
-    parser.add_argument('--load_gen', type=str2bool, default=True)
+    parser.add_argument('--gen_pretrain_file', type=str, default='/apdcephfs/share_916081/visionshao/Exp4Dialogue/GPT2/wizard_of_wikipedia/log/1206_test/checkpoints/model-gen-best')
+    parser.add_argument('--load_dis', type=str2bool, default=False)
+    parser.add_argument('--load_gen', type=str2bool, default=False)
 
     # model
     parser.add_argument('--bert_config', type=str, default='/apdcephfs/share_916081/visionshao/Exp4Dialogue/GPT2/pretrain-models/bert_base_uncased')

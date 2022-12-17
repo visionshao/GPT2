@@ -1,8 +1,8 @@
 {
     "Token": "djWlCqxMFfe5e01p8uBBWg",
     "business_flag": "nlpc",
-    "task_flag": "train_GPT2",
-    "readable_name": "train_GPT2",
+    "task_flag": "train_GPT2_bs_2_accum_32",
+    "readable_name": "train_GPT2_bs_2_accum_32",
     "model_local_file_path": "/apdcephfs/share_916081/visionshao/Exp4Dialogue/GPT2/start",
     "host_num": 1,
     "host_gpu_num": 2,

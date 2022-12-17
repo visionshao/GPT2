@@ -205,8 +205,8 @@ class GenBatcher:
             assert responses is not None
             input_ids, targets, token_type_ids = [], [], []
             for know, his, user, resp in zip(knowledges, histories, users, responses):
-                knowledge_input = [self.tokenize(k)[:self.knowledge_truncate] for k in know]
-                knowledge_input = [w for k in knowledge_input for w in k + [self.know_id]][:-1]
+                knowledge_input = [self.tokenize(k) for k in know]
+                knowledge_input = [w for k in knowledge_input for w in k + [self.know_id]][:-1][:self.knowledge_truncate]
                 knowledge_type = len(knowledge_input) * [self.know_id]
 
                 user = [u for u in user.tolist() if u >= 0]
@@ -245,7 +245,7 @@ class GenBatcher:
         else:
             assert len(knowledges) == 1  # batch_size == 1
             knowledge_input = [self.tokenize(k)[:self.knowledge_truncate] for k in knowledges[0]]
-            knowledge_input = [w for k in knowledge_input for w in k + [self.know_id]][:-1]
+            knowledge_input = [w for k in knowledge_input for w in k + [self.know_id]][:-1][:self.knowledge_truncate]
 
             user = [u for u in users[0].tolist() if u >= 0]
             history_input = []
@@ -253,5 +253,6 @@ class GenBatcher:
                 history_input += [self.user_id[u]] + self.tokenize(h)[:self.text_truncate]
 
             input_ids = knowledge_input + history_input + [self.user_id[1]]
+            input_ids = input_ids[-self.block_size:]
             input_ids = torch.tensor(input_ids, device=self.device, dtype=torch.long).unsqueeze(0)
             return input_ids
